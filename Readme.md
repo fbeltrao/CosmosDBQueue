@@ -121,3 +121,4 @@ The current implementation has some details that can be optimized.
     - tracing
     - monitoring
     - retry policies when calling external dependencies
+    - CosmosDB usage does not rely on partitions at the moment. An idea is to use partitions to split work between consumers
