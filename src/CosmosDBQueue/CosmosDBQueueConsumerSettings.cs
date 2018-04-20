@@ -31,5 +31,11 @@
         /// Default: false (in parallel)
         /// </summary>
         public bool SingleThreadedProcessing { get; set; } = false;
+
+        /// <summary>
+        /// Indicates if queue items should be set to completed automatically by the consumer
+        /// Default: true
+        /// </summary>
+        public bool AutoComplete { get; set; } = true;
     }
 }

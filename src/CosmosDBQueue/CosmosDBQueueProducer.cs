@@ -67,7 +67,7 @@ namespace CosmosDBQueue
             if (!this.initialized)            
                 throw new InvalidOperationException("Must call Initialize() first");            
 
-            var queueItem = new CosmosDBQueueItem()
+            var queueItem = new InternalCosmosDBQueueItem()
             {
                 id = id,
                 data = payload

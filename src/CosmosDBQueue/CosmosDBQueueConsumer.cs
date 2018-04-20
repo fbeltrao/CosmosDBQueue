@@ -42,7 +42,7 @@ namespace CosmosDBQueue
         /// <summary>
         /// Sets callback function handling queue items
         /// </summary>
-        public Func<string, Task<bool>> OnMessage { get; set; }
+        public Func<CosmosDBQueueItem, Task<bool>> OnMessage { get; set; }
 
         IChangeFeedObserver IChangeFeedObserverFactory.CreateObserver() => this;
         Task IChangeFeedObserver.OpenAsync(ChangeFeedObserverContext context) => Task.CompletedTask;
@@ -149,11 +149,11 @@ namespace CosmosDBQueue
         /// </remarks>
         /// <param name="documents"></param>
         /// <returns></returns>
-        private async Task<IList<CosmosDBQueueItem>> TryAdquireLock(IEnumerable<Document> documents)
+        private async Task<IList<InternalCosmosDBQueueItem>> TryAdquireLock(IEnumerable<Document> documents)
         {
 
             // TODO: Replace with stored procedure to batch lock items
-            var result = new List<CosmosDBQueueItem>();
+            var result = new List<InternalCosmosDBQueueItem>();
 
             foreach (var doc in documents)
             {
@@ -161,34 +161,25 @@ namespace CosmosDBQueue
                 {
                     this.logger?.LogTrace($"Trying to lock item {doc.Id}");
 
-                    var updatedDocument = new CosmosDBQueueItem
+                    var updatedDocument = new InternalCosmosDBQueueItem
                     {
                         status = QueueItemStatus.InProgress,
                         data = doc.GetPropertyValue<object>("data"),
                         id = doc.Id,
-                        processStartTime = doc.GetPropertyValue<long>(nameof(CosmosDBQueueItem.processStartTime)),
-                        queuedTime = doc.GetPropertyValue<long>(nameof(CosmosDBQueueItem.queuedTime)),
-                        errors = doc.GetPropertyValue<int>(nameof(CosmosDBQueueItem.errors)),
-                        completedTime = doc.GetPropertyValue<long>(nameof(CosmosDBQueueItem.completedTime)),
+                        processStartTime = doc.GetPropertyValue<long>(nameof(InternalCosmosDBQueueItem.processStartTime)),
+                        queuedTime = doc.GetPropertyValue<long>(nameof(InternalCosmosDBQueueItem.queuedTime)),
+                        errors = doc.GetPropertyValue<int>(nameof(InternalCosmosDBQueueItem.errors)),
+                        completedTime = doc.GetPropertyValue<long>(nameof(InternalCosmosDBQueueItem.completedTime)),
                     };
 
                     updatedDocument.SetWorker(this.workerId).SetWorkerExpiration(settings.ProcessingItemTimeout).SetProcessStartTime();
 
-                    var uri = UriFactory.CreateDocumentCollectionUri(this.settings.QueueCollectionDefinition.DbName, this.settings.QueueCollectionDefinition.CollectionName);
-                    var reqOptions = new RequestOptions()
-                    {
-                        AccessCondition = new AccessCondition()
-                        {
-                            Condition = doc.ETag,
-                            Type = AccessConditionType.IfMatch
-                        }
-                    };
-
-                    var res = await queueCollectionClient.UpsertDocumentAsync(uri, updatedDocument, reqOptions);
+                   
+                    var res = await SaveQueueItem(updatedDocument);
 
                     this.logger?.LogTrace($"Queue item {updatedDocument.id} adquired lock succeeded, costs: {res.RequestCharge}, latency: {res.RequestLatency.TotalMilliseconds}ms");
 
-                    var savedDocument = JsonConvert.DeserializeObject<CosmosDBQueueItem>(res.Resource.ToString());
+                    var savedDocument = JsonConvert.DeserializeObject<InternalCosmosDBQueueItem>(res.Resource.ToString());
                     savedDocument.etag = res.ResponseHeaders["ETag"];
                     result.Add(savedDocument);
                 }
@@ -215,7 +206,7 @@ namespace CosmosDBQueue
         /// </summary>
         /// <param name="queueItems"></param>
         /// <returns></returns>
-        private async Task ProcessQueueItems(IList<CosmosDBQueueItem> queueItems)
+        private async Task ProcessQueueItems(IList<InternalCosmosDBQueueItem> queueItems)
         {
             if (this.settings.SingleThreadedProcessing)
             {                
@@ -239,22 +230,30 @@ namespace CosmosDBQueue
         /// <param name="queueItem"></param>
         /// <param name="persistDocument"></param>
         /// <returns></returns>
-        async Task ProcessSingleItem(CosmosDBQueueItem queueItem, bool persistDocument)
+        async Task ProcessSingleItem(InternalCosmosDBQueueItem queueItem, bool persistDocument)
         {
+            // Persist document only if Auto complete is enabled
+            persistDocument = persistDocument & this.settings.AutoComplete;
+
             try
             {
-                var handlerStatus = await OnMessage(JsonConvert.SerializeObject(queueItem.data));
+                var externalQueueItem = new CosmosDBQueueItem(this, queueItem);
+                var handlerStatus = await OnMessage(externalQueueItem);
                 if (handlerStatus)
                 {
-                    queueItem.SetAsComplete();
+                    if (this.settings.AutoComplete)
+                        queueItem.SetAsComplete();
 
                     this.logger?.LogTrace($"Processing item {queueItem.id} succeeded");
 
                 }
                 else
                 {
-                    queueItem.SetAsPending();
-                    queueItem.errors++;
+                    if (this.settings.AutoComplete)
+                    {
+                        queueItem.SetAsPending();
+                        queueItem.errors++;
+                    }
 
                     this.logger?.LogTrace($"Processing item {queueItem.id} failed");
                 }
@@ -266,30 +265,68 @@ namespace CosmosDBQueue
 
                 queueItem.errors++;
                 queueItem.SetAsPending();
+
+                // If the message handler failed we saved as failed
+                persistDocument = true;
             }
 
             if (persistDocument)
             {
-                try
-                {
-                    var uri = UriFactory.CreateDocumentCollectionUri(this.settings.QueueCollectionDefinition.DbName, this.settings.QueueCollectionDefinition.CollectionName);
-                    var reqOptions = new RequestOptions()
-                    {
-                        AccessCondition = new AccessCondition()
-                        {
-                            Condition = queueItem.etag,
-                            Type = AccessConditionType.IfMatch
-                        }
-                    };
-
-                    var res = await queueCollectionClient.UpsertDocumentAsync(uri, queueItem, reqOptions);
-                    this.logger?.LogTrace($"Queue item {queueItem.id} updated, costs: {res.RequestCharge}, latency: {res.RequestLatency.TotalMilliseconds}ms");
-                }
-                catch (Exception ex)
-                {
-                    this.logger?.LogError(ex, $"Error persisting queue item {queueItem.id}");
-                }
+                await SaveQueueItem(queueItem);
             }
+        }
+
+
+
+        /// <summary>
+        /// Completes the message queue
+        /// </summary>
+        /// <param name="queueItem"></param>
+        /// <returns></returns>
+        public async Task Complete(InternalCosmosDBQueueItem queueItem)
+        {
+            queueItem.SetAsComplete();
+            await SaveQueueItem(queueItem);
+        }
+
+
+        /// <summary>
+        /// Completes the message queue
+        /// </summary>
+        /// <param name="queueItem"></param>
+        /// <returns></returns>
+        public async Task Abandon(InternalCosmosDBQueueItem queueItem)
+        {
+            queueItem.SetAsPending();
+            queueItem.errors++;
+            await SaveQueueItem(queueItem);
+        }
+
+        async Task<ResourceResponse<Document>> SaveQueueItem(InternalCosmosDBQueueItem queueItem)
+        {
+            try
+            {
+                var uri = UriFactory.CreateDocumentCollectionUri(this.settings.QueueCollectionDefinition.DbName, this.settings.QueueCollectionDefinition.CollectionName);
+                var reqOptions = new RequestOptions()
+                {
+                    AccessCondition = new AccessCondition()
+                    {
+                        Condition = queueItem.etag,
+                        Type = AccessConditionType.IfMatch
+                    }
+                };
+
+                var res = await queueCollectionClient.UpsertDocumentAsync(uri, queueItem, reqOptions);
+                this.logger?.LogTrace($"Queue item {queueItem.id} updated, costs: {res.RequestCharge}, latency: {res.RequestLatency.TotalMilliseconds}ms");
+
+                return res;
+            }
+            catch (Exception ex)
+            {
+                this.logger?.LogError(ex, $"Error persisting queue item {queueItem.id}");
+            }
+
+            return null;
         }
     }
 }

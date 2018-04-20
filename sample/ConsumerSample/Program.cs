@@ -30,7 +30,7 @@ namespace ConsumerSample
             var consumer = serviceProvider.GetRequiredService<CosmosDBQueueConsumer>();            
             var random = new Random();
 
-            consumer.OnMessage = async (string message) =>
+            consumer.OnMessage = async (CosmosDBQueueItem message) =>
             {
                 await Task.Delay(10);
                 var sample = random.Next(100) + 1;

@@ -1,72 +1,50 @@
-﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace CosmosDBQueue
 {
+    /// <summary>
+    /// CosmosDB queue item used by processors/consumers
+    /// </summary>
     public class CosmosDBQueueItem
     {
-        public string id { get; set; }
+        private readonly CosmosDBQueueConsumer consumer;
+        private readonly InternalCosmosDBQueueItem queueItem;
 
-        [JsonConverter(typeof(StringEnumConverter))]
-        public QueueItemStatus status { get; set; }
+        /// <summary>
+        /// Queue item data
+        /// </summary>
+        public object Data { get { return this.queueItem.data; } }
 
-        public long queuedTime { get; set; }
-
-        public long processStartTime { get; set; }
-
-        public long completedTime { get; set; }
-        public string currentWorker { get; set; }
-
-
-        public long workerExpires { get; set; }
-
-        public object data { get; set; }
-
-        [JsonIgnore]
-        public string etag { get; set; }
-
-        public int errors { get; set; }
-
-        public CosmosDBQueueItem SetWorkerExpiration(int minutes)
+        /// <summary>
+        /// Constructor
+        /// </summary>
+        /// <param name="consumer"></param>
+        /// <param name="queueItem"></param>
+        protected internal CosmosDBQueueItem(CosmosDBQueueConsumer consumer, InternalCosmosDBQueueItem queueItem)
         {
-            this.workerExpires = Utils.ToUnixTime(DateTime.UtcNow.AddSeconds(minutes));
-            return this;
+            this.consumer = consumer;
+            this.queueItem = queueItem;
         }
 
-        public CosmosDBQueueItem SetWorker(string workerId)
+        /// <summary>
+        /// Complete the queue item, marking with status <see cref="QueueItemStatus.Completed"/>
+        /// </summary>
+        /// <returns></returns>
+        public async Task Complete()
         {
-            this.currentWorker = workerId;
-            return this;
+            await this.consumer.Complete(queueItem);
         }
 
-        public CosmosDBQueueItem SetProcessStartTime()
+        /// <summary>
+        /// Cancels the processing of the item, setting the status to <see cref="QueueItemStatus.Pending"/>
+        /// </summary>
+        /// <returns></returns>
+        public async Task Abandon()
         {
-            this.processStartTime = Utils.ToUnixTime(DateTime.UtcNow);
-            return this;
-        }
-
-        public CosmosDBQueueItem()
-        {
-            this.status = QueueItemStatus.Pending;
-            this.queuedTime = Utils.ToUnixTime(DateTime.UtcNow);            
-        }
-
-        public void SetAsComplete()
-        {
-            this.status = QueueItemStatus.Completed;
-            this.workerExpires = 0;
-            this.completedTime = Utils.ToUnixTime(DateTime.UtcNow);
-        }
-
-        public void SetAsPending()
-        {
-            this.status = QueueItemStatus.Pending;
-            this.workerExpires = 0;
-            this.currentWorker = null;
-            this.processStartTime = 0;
+            await this.consumer.Abandon(queueItem);
         }
     }
 }
