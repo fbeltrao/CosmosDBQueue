@@ -1,7 +1,7 @@
 # CosmosDB based Queue
 DISCLAIMER: This is a draft implementation with many open/sub-optimal implementation choices.
 
-This repository contains a simple CosmosDB based queue implementation. The implementation relies on [change feed notifications](https://azure.microsoft.com/en-us/blog/introducing-the-azure-cosmosdb-change-feed-processor-library/) to discover pending elements to be processed. Adquiring a lock for a queue item relies on optimistic locking of the document (based on ETag) which thens guarantees that only one worker is processing the item (in case multiple consumers with different leases are running in parallel).
+This repository contains a simple CosmosDB based queue implementation. The implementation relies on [change feed notifications](https://azure.microsoft.com/en-us/blog/introducing-the-azure-cosmosdb-change-feed-processor-library/) to discover pending elements to be processed. Adquiring a lock for a queue item relies on optimistic locking of the document (based on ETag) which then guarantees that only a single worker is processing the item (in case multiple consumers with different leases are running in parallel).
 
 This repository contains 3 projects:
 |Project|Description|
