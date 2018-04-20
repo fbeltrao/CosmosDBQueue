@@ -16,8 +16,8 @@ The picture below demostrates how an item queued goes through the processing sys
 
 ![Queue in CosmosDB](./media/queuing-in-cosmos.png)
 
-1. Producers enqueues item with payload `{ id: 636598108808206000 }`
-1. Following document is added to 'queue' collection
+1. Producer enqueues item with payload `{ id: 636598108808206000 }`
+1. A document is added to 'queue' collection
 ```json
 {
     "id": "4a041592-98df-4145-8575-9e7d0da5de5e",
@@ -30,7 +30,7 @@ The picture below demostrates how an item queued goes through the processing sys
     "_etag": "\"00000000-0000-0000-d884-4fd2641c01d3\""
 }
 ```
-3. Consumer receives change documents feed. For each document in status 'Pending' it tries to adquire a lock by updating the status to "InProgress" if the ETag matches (optimistic locking)
+3. Consumer receives changed documents feed. For each document in status 'Pending' it tries to adquire a lock by updating the status to "InProgress" if the ETag matches (optimistic locking)
 1. For queue items where the lock was adquired: call the registered callback. Depending on the callback call response update the document accordingly:
 
     1. **Callback call fails** &rarr; sets status to **"Pending"** and increment errors [item will go back to step 3]
@@ -61,7 +61,8 @@ using (var producer = new CosmosDBQueueProducer())
 ```
 
 ## Consuming queue items
-The following code snippet shows how you can consume items from queue
+
+A queue consumer is a [IChangeFeedObserver](https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.documents.changefeedprocessor.ichangefeedobserver?view=azure-dotnet) that will be called by a [ChangeFeedEventHost](https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.documents.changefeedprocessor.changefeedeventhost?view=azure-dotnet) once document changes are detected. The following code snippet shows how you can consume items from queue
 ```c#
 var consumer = new CosmosDBQueueConsumer();
 
